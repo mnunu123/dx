@@ -119,6 +119,8 @@
   const famKey = (r) => { const k = norm(r.code_as_written) || norm(r.name_as_written).replace(/\(.*?\)/g, ''); return SYN[k] || k; };
   const groupKey = (r) => [r.carrier, famKey(r), r.direction_norm].join('|');
   const VERIFIED = ['auto', 'reviewed', 'corrected'];
+  // 사람이 원문과 대조한 레코드인지(시험·test 정답). dev 정답은 Claude 라벨이라 사람 확인 전이다.
+  const humanOk = (r) => (r.human === undefined ? VERIFIED.includes(r.ai) : r.human);
 
   function calculate(db, ship, geo) {
     const notices = db.notices;
@@ -126,7 +128,7 @@
     const excluded = [];
     for (const r of db.records) {
       if (ship.carrier && ship.carrier !== '*' && r.carrier !== ship.carrier) continue;
-      if (ship.verifiedOnly && !VERIFIED.includes(r.ai)) continue;
+      if (ship.verifiedOnly && !humanOk(r)) continue;
       if (!ship.includeLocal && r.category === 'local_port') continue;
       const sz = sizeMatch(r, ship.size); if (!sz.ok) continue;
       const ty = typeMatch(r, ship.type); if (!ty.ok) continue;
@@ -147,7 +149,7 @@
       }
       if (ship.categories && !ship.categories.includes(r.category)) continue;
       const m = money(r, ship);
-      const flags = [...(VERIFIED.includes(r.ai) ? [] : ['AI 추출 결과, 사람 확인 전' + (r.ai === 'ai_review' ? '(검사기가 검토 필요로 표시)' : '')]), ...(sc.flags || []), ...(sz.flag ? [sz.flag] : []), ...(ty.flag ? [ty.flag] : []), ...bd.flags, ...m.flags];
+      const flags = [...(humanOk(r) ? [] : [VERIFIED.includes(r.ai) ? '정답 라벨(Claude 작성), 사람 확인 전' : 'AI 추출 결과, 사람 확인 전' + (r.ai === 'ai_review' ? '(검사기가 검토 필요로 표시)' : '')]), ...(sc.flags || []), ...(sz.flag ? [sz.flag] : []), ...(ty.flag ? [ty.flag] : []), ...bd.flags, ...m.flags];
       if (!r.effective_from) flags.push(pub ? `공지에 적용 시작일이 없음. 게시일(${pub})부터로 판단` : '공지에 적용 시작일·게시일이 없음');
       if ((r.conditions || []).includes('effective_date_varies_by_origin')) flags.push(`출발지·규제국에 따라 적용일이 다름: "${r.effective_from_text}"`);
       if ((r.conditions || []).includes('subject_to_regulatory_approval')) flags.push('규제 승인 전제(미국 FMC 등)');
@@ -217,6 +219,6 @@
     return { lines: out, upcoming, excluded, totals };
   }
 
-  const api = { calculate, TEU };
+  const api = { calculate, TEU, humanOk };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Calc = api;
 })(typeof self !== 'undefined' ? self : this);

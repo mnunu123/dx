@@ -27,11 +27,11 @@
   const AI = {
     auto: ['ok', '사람 확인', 'AI 추출이 정답과 같았고, 검사기가 자동 승인한 할증'],
     reviewed: ['ok', '사람 확인', 'AI 추출이 정답과 같았고, 검사기가 사람 확인으로 보낸 할증'],
-    corrected: ['ok', '사람 확인', 'AI 추출이 틀렸거나 빠져서 사람이 고친 할증'],
+    corrected: ['ok', '사람 확인', 'AI 추출이 정답과 다르거나 빠진 할증(정답 값을 씀)'],
     ai_auto: ['warn', 'AI, 확인 전', 'AI 추출 결과. 검사기는 자동 승인, 사람 확인은 아직'],
     ai_review: ['warn', 'AI, 확인 요청', 'AI 추출 결과. 검사기가 사람 확인이 필요하다고 표시'],
   };
-  const VERIFIED = ['auto', 'reviewed', 'corrected'];
+  const VERIFIED = ['auto', 'reviewed', 'corrected']; // 정답 라벨이 있는 상태. 사람 확인 여부는 r.human
   const OCEAN = ['emergency_fuel', 'conflict_war_risk', 'contingency_cost_recovery', 'bunker_regular', 'rate_increase', 'environmental'];
   const CARRIER_ORDER = ['Maersk', 'MSC', 'CMA CGM', 'ONE', 'Evergreen', '장금상선', '흥아라인'];
   const SERIES = { Maersk: 'var(--s1)', MSC: 'var(--s2)', 'CMA CGM': 'var(--s3)', ONE: 'var(--s4)' };
@@ -51,6 +51,11 @@
   const hideTip = () => { tip.hidden = true; };
   const chip = (kind, text, title) => `<span class="chip ${kind}"${title ? ` title="${esc(title)}"` : ''}>${esc(text)}</span>`;
   const aiChip = (ai) => { const a = AI[ai] || ['plain', ai, '']; return chip(a[0], a[1], a[2]); };
+  // 레코드 상태: 사람 확인(시험·test 정답) / Claude 정답 라벨(dev, 사람 확인 전) / AI 추출(정답 없음)
+  const recChip = (r) => {
+    if (VERIFIED.includes(r.ai) && !r.human) return chip('warn', 'Claude 정답, 확인 전', 'Claude가 만든 정답 라벨(dev). 지시문을 다듬는 데 썼고 사람이 원문과 대조하지는 않음. ' + (AI[r.ai] || [])[2]);
+    return aiChip(r.ai);
+  };
   const recLabel = (r) => r.code_as_written || r.name_as_written || '(이름 없음)';
   const condText = (c) => (c.startsWith('grouped:') ? '묶음: ' + c.slice(8) : c.startsWith('excludes:') ? '제외: ' + c.slice(9) : c.startsWith('percent_of:') ? '기준: ' + c.slice(11) : COND[c] || c);
   const noticeHref = (nid, idx) => '#notices/' + encodeURIComponent(nid) + (idx != null ? '/' + idx : '');
@@ -137,7 +142,7 @@
             <div class="filters">
               <select id="f-carrier" aria-label="선사"><option value="">전체 선사</option>${carriers.map((c) => `<option>${esc(c)}</option>`).join('')}</select>
               <select id="f-status" aria-label="확인 상태">
-                <option value="">전체 상태</option><option value="gold">사람 확인한 공지</option><option value="ai">AI 추출(확인 전)</option>
+                <option value="">전체 상태</option><option value="gold">사람 확인한 공지</option><option value="ai">사람 확인 전 공지</option>
                 <option value="review">확인 요청 있는 공지</option><option value="none">할증 없는 공지</option>
               </select>
               <input id="f-q" type="search" placeholder="제목, 약어 검색(예: EBS, 호르무즈)" aria-label="검색">
@@ -162,8 +167,8 @@
     const f = S.inbox;
     return Object.entries(S.db.notices).filter(([nid, n]) => {
       if (f.carrier && n.carrier !== f.carrier) return false;
-      if (f.status === 'gold' && !n.labeled) return false;
-      if (f.status === 'ai' && n.labeled) return false;
+      if (f.status === 'gold' && !n.human) return false;
+      if (f.status === 'ai' && n.human) return false;
       if (f.status === 'none' && n.records) return false;
       if (f.status === 'review' && !S.db.records.some((r) => r.notice_id === nid && r.ai === 'ai_review')) return false;
       if (f.q) {
@@ -179,7 +184,7 @@
     const cur = location.hash.split('/')[1];
     $('#nlist').innerHTML = list.length ? list.map(([nid, n]) => {
       const { c } = noticeStats(nid);
-      const tags = [n.labeled ? chip('ok', '사람 확인') : chip('warn', 'AI, 확인 전'), n.records ? chip('plain', `할증 ${n.records}개`) : chip('plain', '할증 없음')];
+      const tags = [n.human ? chip('ok', '사람 확인') : n.labeled ? chip('warn', 'Claude 정답, 확인 전') : chip('warn', 'AI, 확인 전'), n.records ? chip('plain', `요금 ${n.records}개`) : chip('plain', '할증 없음')];
       if (c.ai_review) tags.push(chip('warn', `확인 요청 ${c.ai_review}`));
       return `<li><button data-nid="${esc(nid)}" aria-current="${cur && decodeURIComponent(cur) === nid}">
         <span class="nl-meta"><span>${esc(n.carrier)}</span><span>${n.published_date ? esc(n.published_date) : '게시일 없음'}</span></span>
@@ -191,12 +196,12 @@
     const { recs, c } = noticeStats(nid);
     let sum;
     if (!recs.length) sum = '할증·요금이 없는 공지입니다(운영 안내). AI가 여기서 할증을 지어내지 않는지 확인하는 사례로 썼습니다.';
-    else if (n.labeled) sum = `사람이 원문과 대조해 확인한 할증 ${recs.length}개. AI 추출(Claude Sonnet)과 비교하면 그대로 맞은 것 ${(c.auto || 0) + (c.reviewed || 0)}개(검사기 자동 승인 ${c.auto || 0}, 사람 확인으로 보냄 ${c.reviewed || 0}), 틀리거나 빠져서 고친 것 ${c.corrected || 0}개.`;
+    else if (n.labeled) sum = `${n.human ? '사람이 원문과 대조해 확인한' : 'Claude가 만든 정답 라벨(dev, 사람 확인 전)의'} 할증·요금 ${recs.length}개. AI 추출(Claude Sonnet)과 비교하면 그대로 맞은 것 ${(c.auto || 0) + (c.reviewed || 0)}개(검사기 자동 승인 ${c.auto || 0}, 사람 확인으로 보냄 ${c.reviewed || 0}), 다르거나 빠진 것 ${c.corrected || 0}개.`;
     else {
       const reasons = {};
       recs.filter((r) => r.ai === 'ai_review').forEach((r) => (r.ai_reasons || []).forEach((x) => { reasons[x] = (reasons[x] || 0) + 1; }));
       const rs = Object.entries(reasons).map(([k, v]) => `${REASON[k] || k} ${v}`).join(', ');
-      sum = `AI가 뽑은 할증 ${recs.length}개, 사람 확인 전. 검사기 자동 승인 ${c.ai_auto || 0}개, 확인 요청 ${c.ai_review || 0}개${rs ? `(${rs})` : ''}.`;
+      sum = `AI가 뽑은 할증·요금 ${recs.length}개, 사람 확인 전. 검사기 자동 승인 ${c.ai_auto || 0}개, 확인 요청 ${c.ai_review || 0}개${rs ? `(${rs})` : ''}.`;
     }
     $('#ndetail').innerHTML = `
       <a class="btn small back" href="#notices">목록으로</a>
@@ -232,7 +237,7 @@
       <td>${esc(SIZE[r.container_size] || r.container_size)} ${esc(TYPE[r.container_type] || r.container_type)}</td>
       <td><span class="nm" style="color:var(--ink-2)">${esc(DIR[r.direction_norm] || '')}</span>${esc(sc.length > 70 ? sc.slice(0, 68) + '…' : sc)}</td>
       <td class="num">${esc(r.effective_from || '—')}<span class="nm">${esc(BASIS[r.basis_rule] || '')} 기준</span></td>
-      <td>${aiChip(r.ai)}</td></tr>`;
+      <td>${recChip(r)}</td></tr>`;
   }
   function toggleRec(tr) {
     const next = tr.nextElementSibling;
@@ -251,7 +256,7 @@
       ['청구 위치', PAY[r.payment_location]],
       ['조건', (r.conditions || []).map(condText).join(', ')],
       ['검사기', r.ai_reasons ? (r.ai_reasons.length ? r.ai_reasons.map((x) => REASON[x] || x).join(', ') : '통과') : ''],
-      ['상태 설명', (AI[r.ai] || [])[2]],
+      ['상태 설명', (VERIFIED.includes(r.ai) && !r.human ? 'Claude가 만든 정답 라벨(dev, 사람 확인 전). ' : '') + ((AI[r.ai] || [])[2] || '')],
     ].filter(([, v]) => v);
     const x = document.createElement('tr');
     x.className = 'recx';
@@ -302,7 +307,7 @@
             <label for="c-asof">견적 시점으로 보기</label><input id="c-asof" name="asof" type="date">
             <p class="hint">날짜를 넣으면 그날까지 게시된 공지만으로 계산하고, 출항 때 실제 합계와 비교합니다.</p>
           </div>
-          <label class="check"><input type="checkbox" name="verifiedOnly" id="c-ver"><span>사람이 확인한 공지만 쓰기<small>AI 추출(확인 전) 35건을 뺍니다</small></span></label>
+          <label class="check"><input type="checkbox" name="verifiedOnly" id="c-ver"><span>사람이 확인한 공지만 쓰기<small>사람 확인 전 46건(Claude 정답 11, AI 추출 35)을 뺍니다</small></span></label>
         </form>
         <div class="cres" id="cres" aria-live="polite"></div>
       </div>`;
@@ -412,14 +417,16 @@
       el.dataset.ready = 1;
       const sc = S.sc, sm = sc.summary, ev = sc.events;
       const weeklyDelay = ev.reduce((a, e) => a + diffDays(e.weekly_aware, e.published), 0) / ev.length;
-      const instant = ev.filter((e) => e.lead_days <= 0).length;
+      const retro = ev.filter((e) => e.effective_from && e.effective_from < e.published).length;
+      const nostart = ev.filter((e) => !e.effective_from).length;
+      const late = sm.events_after_effective_weekly;
       const sp = sm.surprise;
       el.innerHTML = `
         <div class="view-head"><h1>할증 타임라인: 2026년 중동 사태 재현</h1>
           <p>부산 → 제벨알리 40' Dry 1개를 견적 2주 뒤 출항으로 계속 견적했다고 가정하고, 수집한 공지(Maersk, MSC, CMA CGM, ONE)만으로 언제 무엇이 붙었는지 다시 계산했습니다. 해상 할증만 봅니다.</p></div>
         <div class="facts">
-          <p>이 화물에 붙은 할증 공지 <b>${ev.length}건</b>. 게시에서 적용까지 간격은 중앙값 <b>${sm.median_lead_days}일</b>이고, <b>${instant}건</b>은 게시 당일이나 그 전부터 적용됐습니다.</p>
-          <p>매주 월요일에 확인하면 게시 후 평균 <b>${weeklyDelay.toFixed(1)}일</b> 뒤에 알게 되고, <b>${sm.events_after_effective_weekly}건</b>은 이미 적용된 뒤입니다. 매일 수집하면 늦어도 다음 날 압니다.</p>
+          <p>이 화물에 붙은 할증 공지 <b>${ev.length}건</b>. 게시에서 적용까지 간격은 중앙값 <b>${sm.median_lead_days}일</b>입니다. <b>${retro}건</b>은 게시일보다 앞선 날짜로 소급됐고, <b>${nostart}건</b>은 시작일 없이 이미 받은 부킹에 붙었습니다.</p>
+          <p>매주 월요일에 확인하면 게시 후 평균 <b>${weeklyDelay.toFixed(1)}일</b> 뒤에 알고, <b>${late}건</b>은 적용이 시작된 뒤에 압니다. 매일 수집하면 지연은 하루로 줄지만 이 ${late}건은 여전히 늦습니다. 그때 남는 일은 영향받는 부킹을 빨리 찾는 것입니다.</p>
           <p>견적 뒤 새 할증이 생긴 견적일: CMA CGM <b>${sp['CMA CGM'].quotes_with_new_charge}/${sp['CMA CGM'].quotes}일</b>, Maersk <b>${sp.Maersk.quotes_with_new_charge}일</b>, MSC <b>${sp.MSC.quotes_with_new_charge}일</b>. 최대 40' 1개당 USD <b>${fmt(Math.max(...Object.values(sp).map((x) => x.max_new_charge)))}</b>.</p>
         </div>
         <div class="panel"><div class="panel-h"><h2>KCCI 중동항로 지수와 할증 공지</h2><span class="small muted">KCCI 주간, 한국해양진흥공사</span></div>
@@ -434,7 +441,7 @@
             <tbody>${ev.map((e) => `<tr><td class="num">${kd(e.published)}</td><td class="num">${e.effective_from ? kd(e.effective_from) : '게시일'}</td><td class="r num">${e.lead_days}일</td>
               <td><span class="dot" style="background:${SERIES[e.carrier]}"></span>${esc(e.carrier)}</td>
               <td><a href="${noticeHref(e.notice_id)}">${esc(e.code)}</a></td><td class="r num">${e.amount_40 == null ? '금액 없음' : esc(money(e.currency, e.amount_40))}${e.status === 'alternative' ? '<span class="nm">후보 중 하나</span>' : ''}</td>
-              <td>${margin(e.daily_margin)}</td><td>${margin(e.weekly_margin)}</td><td>${aiChip(e.ai)}</td></tr>`).join('')}</tbody></table></div></div>
+              <td>${margin(e.daily_margin)}</td><td>${margin(e.weekly_margin)}</td><td>${recChip(e)}</td></tr>`).join('')}</tbody></table></div></div>
         <div class="panel"><div class="panel-h"><h2>읽을 때 주의할 점</h2></div>
           <ul class="flagl" style="font-size:15px">
             <li>미래 공지는 어떤 도구도 미리 알 수 없습니다. 도구가 줄이는 것은 게시 후 알아차리기까지의 시간과, 영향받는 기존 부킹을 찾는 시간입니다.</li>
@@ -576,7 +583,7 @@
 
   // ---------- 검증 리포트 ----------
   const CASE_NOTE = [
-    [(c) => c.carrier === 'CMA CGM' && /Dangerous/i.test(c.code), '위험물 할증의 컨테이너 타입', "원문 'IMDG Dry'를 정답은 위험물(dg)로, AI는 일반 Dry로 봤습니다. 검사기는 근거 구절과 금액만 원문과 대조하므로 이런 해석 차이는 못 거릅니다. 자동 승인됐는데 틀린 4개가 모두 이 경우입니다."],
+    [(c) => c.carrier === 'CMA CGM' && /Dangerous/i.test(c.code), '위험물 할증을 일반 화물 대상으로 적음', "원문 'IMDG Dry'(위험물 중 Dry 컨테이너)를 AI가 일반 Dry로 적었습니다. 그대로 쓰면 해당 구간의 일반 화물 견적에 위험물 할증(컨테이너당 USD 5,000 등)이 붙습니다. 검사기는 근거 구절과 금액이 원문에 있는지만 보므로 이 오류를 못 거릅니다. 자동 승인됐는데 틀린 4개가 모두 이 경우라, 실증에서는 위험물 표기를 검사 규칙에 넣습니다."],
     [(c) => c.carrier === 'ONE' && /^IH[DL]$/.test(c.code), '공지에 없는 컨테이너 타입을 채움', '공지에 컨테이너 타입이 따로 적혀 있지 않은데 AI가 Dry로 채웠습니다. 금액과 시작일은 맞았습니다. 검사기가 사람 확인으로 보낸 것들입니다.'],
     [(c) => c.carrier === 'Maersk' && /storage/i.test(c.code), '보관료 단위', "'TEU당 하루' 요금을 AI는 'TEU당'으로만 적었습니다. 기간을 모르면 합계에 넣을 수 없는 값이라 정답은 표준 밖 단위로 둡니다. 사람 확인으로 갔습니다."],
     [(c) => c.carrier === 'Maersk', '같은 요금을 다른 이름으로 적음', "호르무즈 해협 통과 추가요금(USD 1,000)을 AI가 'Strait of Hormuz Emergency Freight rate'라는 이름으로 적어 정답('additional fee')과 짝이 안 맞았습니다. 금액은 맞지만 평가 규칙상 누락 1 + 잘못 추가 1로 셉니다."],
@@ -604,21 +611,21 @@
       <section><h2>정답을 만든 방법</h2>
         <ol class="steps">
           <li>수집한 공지 80건 중 45건(시험 3, dev 11, test 31)을 정답셋으로 정했습니다. 선사 ${R.gold.carriers.length}곳: ${esc(R.gold.carriers.join(', '))}.</li>
-          <li>Claude가 1차 라벨을 만들고, 1차를 보지 않은 별도 에이전트가 2차 라벨을 만들어 대조했습니다. 차이 22개를 원문으로 확인해 고쳤습니다.</li>
-          <li>사람(패스파인더)이 test ${R.gold.test_records}개 할증을 전부 원문과 대조했습니다. 이상 없음.</li>
+          <li>test는 Claude가 1차 라벨을 만들고, 1차를 보지 않은 별도 에이전트가 2차 라벨을 만들어 대조했습니다. 값이 다른 22개를 원문으로 확인해 1차를 고쳤고, 표기 관례 차이 9개가 남았습니다.</li>
+          <li>사람(패스파인더)이 test ${R.gold.test_records}개 레코드를 전부 원문과 대조했습니다(이상 없음). 시험 3건도 사람이 확인했습니다. dev 11건은 지시문을 다듬는 데만 써서 Claude 라벨 그대로입니다.</li>
           <li>추출기는 정답을 볼 수 없는 별도 작업 공간에서, 측정 전에 고정한 지시문으로 돌렸습니다. 규칙은 dev로만 다듬었습니다.</li>
         </ol></section>
-      <section><h2>test 결과: 공지 ${son.notices}건, 정답 할증 ${son.gold}개</h2>
-        <p>정확 = 같은 할증으로 짝지어지고 금액·통화·단위·크기·타입·시작일 6칸이 모두 맞은 것. 자동 승인 = 규칙 검사기를 통과해 사람 확인 없이 쓰는 것.</p>
+      <section><h2>test 결과: 공지 ${son.notices}건, 정답 레코드 ${son.gold}개</h2>
+        <p>레코드 = 할증 하나, 또는 공지에 함께 나온 반납·보관·항만 요금 하나. 정확 = 같은 요금으로 짝지어지고 금액·통화·단위·크기·타입·시작일 6칸이 모두 맞은 것. 자동 승인 = 규칙 검사기를 통과해 사람 확인 없이 쓰는 것. 사람 확인 비율의 분모는 각 추출기가 뽑은 레코드 수입니다.</p>
         ${tbl(test, 'test 결과')}
         <details class="sub" style="padding:12px 0 0;border:0"><summary>dev 결과(지시문을 다듬는 데 쓴 세트, 공지 14건)</summary><div style="margin-top:10px">${tbl(dev, 'dev 결과')}</div></details></section>
       <section><h2>Claude Sonnet, 칸별 정확도</h2>
         <p>짝지어진 할증 ${son.gold - 2}개에서 칸마다 정답과 같은 비율입니다. 범위(출발 지역 표기)가 가장 약합니다.</p>
         <div class="tbl-wrap"><table><thead><tr><th>칸</th><th>정확도</th></tr></thead><tbody>${fa.map(([k, v]) => `<tr><td>${esc(FIELD[k] || k)}</td><td class="num"><span class="bar" style="width:${Math.max(2, v * 220)}px"></span>${(100 * v).toFixed(1)}%</td></tr>`).join('')}</tbody></table></div></section>
       <section><h2>선사별(Claude Sonnet)</h2>
-        <div class="tbl-wrap"><table><thead><tr><th>선사</th><th class="r">공지</th><th class="r">정답 할증</th><th class="r">정확</th></tr></thead><tbody>${Object.entries(R.by_carrier).map(([c, b]) => `<tr><td>${esc(c)}</td><td class="r num">${b.notices}</td><td class="r num">${b.gold}</td><td class="r num">${b.exact} (${pct(b.exact, b.gold)})</td></tr>`).join('')}</tbody></table></div></section>
-      <section><h2>틀린 ${R.cases.length}건, 전부</h2>
-        <p>정답과 다른 칸이 있는 ${R.cases.filter((c) => c.kind === 'diff').length}개, 이름이 달라 짝을 못 지은 ${R.cases.filter((c) => c.kind === 'missed').length}쌍입니다. 근거 구절은 정답의 것입니다.</p>
+        <div class="tbl-wrap"><table><thead><tr><th>선사</th><th class="r">공지</th><th class="r">정답 레코드</th><th class="r">정확</th></tr></thead><tbody>${Object.entries(R.by_carrier).map(([c, b]) => `<tr><td>${esc(c)}</td><td class="r num">${b.notices}</td><td class="r num">${b.gold}</td><td class="r num">${b.exact} (${pct(b.exact, b.gold)})</td></tr>`).join('')}</tbody></table></div></section>
+      <section><h2>정답과 다른 것 ${R.cases.length}건, 전부</h2>
+        <p>칸이 정답과 다른 ${R.cases.filter((c) => c.kind === 'diff').length}개, 이름이 달라 짝을 못 지은 ${R.cases.filter((c) => c.kind === 'missed').length}쌍(누락 ${R.cases.filter((c) => c.kind === 'missed').length}, 잘못 추가 ${R.cases.filter((c) => c.kind === 'extra').length})입니다. 정확 ${son.exact}/${son.gold}에서 빠진 ${son.gold - son.exact}개가 앞의 두 종류입니다. 근거 구절은 정답의 것입니다.</p>
         ${groups.filter((g) => g.items.length).map((g) => `<div class="case"><h3>${esc(g.title)} (${g.items.length}개)</h3><p>${esc(g.note)}</p>
           <p class="small muted" style="margin-top:6px">${esc(g.items[0].carrier)}: <a href="${noticeHref(g.items[0].notice_id)}">${esc(g.items[0].title)}</a>${g.items[0].diff ? ' · 정답과 AI: ' + Object.entries(g.items[0].diff).map(([k, v]) => `${FIELD[k] || k} ${v[0]} / ${v[1]}`).join(', ') : ''}${g.items.some((c) => c.auto) ? ' · ' + chip('late', `자동 승인됨 ${g.items.filter((c) => c.auto).length}`) : ''}</p>
           <ul class="ev">${(g.items[0].evidence || []).slice(0, 1).map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>`).join('')}</section>
@@ -638,7 +645,8 @@
         <li>정답 라벨과 추출기가 같은 Claude 계열입니다. 사람 전수 확인으로 보완했지만, 확인 기록은 줄별로 남기지 않았습니다.</li>
         <li>추출 지시문의 규칙 일부는 test 라벨 작업 중 가이드에 들어갔습니다. test 공지 문구는 넣지 않았습니다.</li>
         <li>표본이 작습니다(test 공지 31건, 선사 7곳). 레코드 93개짜리 Maersk 공지 2건이 결과의 큰 몫을 차지합니다.</li>
-        <li>AI 추출 35건(정답 없는 공지)은 사람 확인 전입니다. 계산기에서 빼고 볼 수 있습니다.</li>
+        <li>AI 추출 35건(정답 없는 공지)과 dev 정답 11건(Claude 라벨)은 사람 확인 전입니다. 계산기에서 빼고 볼 수 있습니다.</li>
+        <li>계산기는 종료일이 없는 할증을 다음 공지가 나올 때까지 계속 붙입니다. 철회 공지를 못 모으면 실제보다 많이 계산될 수 있습니다.</li>
         <li>계산 규칙 중 공지에 없는 판단(TEU 환산, 방향 구분, 기존 부킹 적용 범위)은 해석이며 '확인할 것'으로 표시합니다.</li>
       </ul></section></div>`;
   }
