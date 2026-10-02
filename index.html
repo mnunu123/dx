@@ -23,6 +23,7 @@
     </a>
     <nav class="tabs" aria-label="화면">
       <a href="#overview" data-view="overview">개요</a>
+      <a href="#weekly" data-view="weekly">주간 브리핑</a>
       <a href="#notices" data-view="notices">공지함</a>
       <a href="#timeline" data-view="timeline">할증 타임라인</a>
       <a href="#calc" data-view="calc">내 화물 계산기</a>
@@ -41,7 +42,7 @@
       <p class="lede">할증레이더는 선사 할증 공지를 읽어 표로 만들고, 내 화물에 얼마가 붙는지 바로 계산합니다. 숫자마다 공지 원문의 구절이 따라붙어서, 누구든 원문으로 돌아가 확인할 수 있습니다.</p>
       <div class="cta">
         <a class="btn primary" href="#calc">내 화물 계산하기</a>
-        <a class="btn" href="#notices">공지함 보기</a>
+        <a class="btn" href="#weekly">주간 브리핑 보기</a>
       </div>
     </div>
 
@@ -93,7 +94,7 @@
       <li><h3>공지 수집</h3><p>선사 홈페이지의 할증·운영 공지를 매일 가져옵니다. 이 프로토타입은 7개 선사 공지 80건을 미리 받아 둔 상태입니다.</p></li>
       <li><h3>AI 추출</h3><p>공지마다 할증 이름, 금액, 대상 컨테이너, 적용 범위, 시작일, 기준일을 뽑고 근거 구절을 원문 그대로 붙입니다.</p><p class="t">공지 1건 중앙값 <b data-fill="agentMedian">22초</b></p></li>
       <li><h3>규칙 검사</h3><p>근거 구절이 원문에 있는지, 금액이 그 구절 안에 있는지 등을 기계로 대조합니다. 걸리면 사람 확인으로 보냅니다.</p><p class="t">공지 1건 <b data-fill="valMs">2ms</b></p></li>
-      <li><h3>화물별 계산</h3><p>선사, 구간, 컨테이너, 부킹·출항일을 넣으면 붙는 할증과 합계, 확인이 필요한 판단을 보여줍니다.</p><p class="t">화물 1건 <b data-fill="calcMs">0.2ms</b></p></li>
+      <li><h3>화물별 계산과 알림</h3><p>선사, 구간, 컨테이너, 부킹·출항일로 붙는 할증과 합계를 냅니다. 새 공지가 나오면 진행 중 부킹 중 금액이 바뀌는 것을 골라 보여줍니다.</p><p class="t">화물 1건 <b data-fill="calcMs">0.2ms</b></p></li>
     </ol>
   </section>
 
@@ -108,6 +109,7 @@
   </section>
 </section>
 
+<section class="view" id="view-weekly" data-view="weekly" hidden></section>
 <section class="view" id="view-notices" data-view="notices" hidden></section>
 <section class="view" id="view-timeline" data-view="timeline" hidden></section>
 <section class="view" id="view-calc" data-view="calc" hidden></section>

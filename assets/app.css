@@ -336,3 +336,29 @@ input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; accent-color:
 .flagl details summary::-webkit-details-marker { display: none; }
 .flagl details[open] summary { display: none; }
 .flagl details ul { margin: 0; padding: 0; list-style: none; }
+
+/* 주간 브리핑 */
+.wk-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+.wk-bar select { width: auto; min-width: 260px; flex: 0 1 auto; }
+.wk-bar .btn[disabled] { opacity: .45; cursor: default; }
+.wk-stats b.up, .wk b.up { color: var(--late); }
+.wk-stats b.down, .wk b.down { color: var(--ok); }
+.wk-stats b .small { font-weight: 400; }
+.cause { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+.cause li + li { margin-top: 4px; }
+.cause .plus { color: var(--late); font-weight: 700; }
+.cause .minus { color: var(--ok); font-weight: 700; }
+@media (max-width: 640px) {
+  .lines.wk td:nth-child(3) { grid-column: 1 / -1; grid-row: auto; text-align: left; color: var(--ink-3); font-size: 13.5px; }
+  .lines.wk td:nth-child(4) { grid-column: 2; grid-row: 1 / span 2; text-align: right; }
+  .wk-bar select { min-width: 0; flex: 1 1 100%; order: -1; }
+}
+@media (max-width: 640px) {
+  table.stack thead { display: none; }
+  table.stack tr { display: block; padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+  table.stack tr:last-child { border-bottom: 0; }
+  table.stack td { display: inline-block; border: 0; padding: 0 10px 0 0; vertical-align: baseline; }
+  table.stack td.full { display: block; margin: 4px 0; padding: 0; }
+  table.stack td.r { text-align: left; }
+  table.stack td .nm { display: inline; margin-left: 4px; }
+}

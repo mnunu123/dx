@@ -36,7 +36,7 @@
   const CARRIER_ORDER = ['Maersk', 'MSC', 'CMA CGM', 'ONE', 'Evergreen', '장금상선', '흥아라인'];
   const SERIES = { Maersk: 'var(--s1)', MSC: 'var(--s2)', 'CMA CGM': 'var(--s3)', ONE: 'var(--s4)' };
 
-  const S = { db: null, sc: null, rep: null, inbox: { carrier: '', status: '', q: '' }, drawn: {} };
+  const S = { db: null, sc: null, rep: null, wk: null, inbox: { carrier: '', status: '', q: '' }, drawn: {} };
 
   // ---------- 공통 ----------
   const tip = $('#tip');
@@ -81,7 +81,7 @@
   }
 
   // ---------- 라우팅 ----------
-  const VIEWS = { overview: viewOverview, notices: viewNotices, timeline: viewTimeline, calc: viewCalc, report: viewReport };
+  const VIEWS = { overview: viewOverview, weekly: viewWeekly, notices: viewNotices, timeline: viewTimeline, calc: viewCalc, report: viewReport };
   let current = null;
   function route() {
     const parts = location.hash.slice(1).split('/').map((p) => decodeURIComponent(p));
@@ -123,6 +123,114 @@
     });
     requestAnimationFrame(() => fig.classList.add('play'));
   })();
+
+
+  // ---------- 주간 브리핑 ----------
+  // 한 주(월~일)에 새로 게시된 공지와, 그 공지 때문에 할증 합계가 바뀌는 진행 중 부킹(가상)을 보여준다.
+  // 진행 중 = 그 주 일요일까지 부킹했고, 그 주 월요일 이후 출항. 비교 = 그 주 전날까지 게시된 공지 vs 그 주까지 게시된 공지.
+  const monday = (d) => { const x = day(d); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x.toISOString().slice(0, 10); };
+  const portKo = (c) => Geo.portName[c] || c;
+  function weekList() {
+    const by = {};
+    Object.values(S.db.notices).forEach((n) => { if (n.published_date) { const w = monday(n.published_date); by[w] = (by[w] || 0) + 1; } });
+    return Object.entries(by).filter(([w]) => w >= '2025-12-29').sort((a, b) => a[0].localeCompare(b[0]));
+  }
+  function totalsMax(t) { const o = {}; if (t) Object.entries(t).forEach(([cur, m]) => { o[cur] = m.max; }); return o; }
+  function weekData(w) {
+    const we = addDays(w, 6);
+    const notices = Object.entries(S.db.notices).filter(([, n]) => n.published_date && n.published_date >= w && n.published_date <= we)
+      .sort((a, b) => a[1].published_date.localeCompare(b[1].published_date));
+    const before = dbAsOf(addDays(w, -1)), after = dbAsOf(we);
+    const live = S.wk.bookings.filter((b) => b.booking <= we && b.etd >= w);
+    const rows = [];
+    let calcMs = 0;
+    live.forEach((b) => {
+      const ship = { carrier: b.carrier, origin: b.origin, destination: b.destination, size: b.size, type: b.type, qty: b.qty, booking: b.booking, etd: b.etd, includeLocal: false, categories: OCEAN };
+      const t0 = performance.now();
+      const a = Calc.calculate(before, ship, Geo), c = Calc.calculate(after, ship, Geo);
+      calcMs += performance.now() - t0;
+      const aIds = new Set(a.lines.map((l) => l.r.id)), cIds = new Set(c.lines.map((l) => l.r.id));
+      const added = c.lines.filter((l) => !aIds.has(l.r.id) && l.status !== 'included');
+      const gone = a.lines.filter((l) => !cIds.has(l.r.id) && l.status !== 'included');
+      const ta = totalsMax(a.totals[b.carrier]), tc = totalsMax(c.totals[b.carrier]);
+      const delta = {};
+      new Set([...Object.keys(ta), ...Object.keys(tc)]).forEach((cur) => { const d = (tc[cur] || 0) - (ta[cur] || 0); if (d) delta[cur] = d; });
+      const row = { b, ship, ta, tc, delta, added, gone };
+      row.hit = Object.keys(delta).length > 0 || added.length > 0 || gone.length > 0;
+      rows.push(row);
+    });
+    const hits = rows.filter((r) => r.hit).sort((x, y) => Math.abs(y.delta.USD || 0) - Math.abs(x.delta.USD || 0));
+    const usd = hits.reduce((s2, r) => s2 + (r.delta.USD || 0), 0);
+    return { w, we, notices, live, rows, hits, usd, calcMs };
+  }
+  const signMoney = (cur, n) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${cur} ${fmt(Math.abs(n))}`;
+  const curList = (o) => (Object.keys(o).length ? Object.entries(o).map(([cur, n]) => money(cur, n)).join(' + ') : '0');
+  function viewWeekly(args) {
+    const el = $('#view-weekly');
+    const weeks = weekList();
+    if (!el.dataset.ready) {
+      el.dataset.ready = 1;
+      el.innerHTML = `
+        <div class="view-head"><h1>주간 브리핑</h1>
+          <p>한 주 동안 새로 나온 선사 공지와, 그 공지 때문에 할증 합계가 바뀌는 진행 중 부킹을 골라 보여줍니다. 매주 월요일 KCCI 발표와 같은 주기로 보는 화면입니다. 부킹 목록은 <b>가상 예시</b>(부산 출발, 주 8~12건)이고, 공지와 할증은 실제 수집한 것입니다.</p></div>
+        <div class="wk-bar">
+          <button class="btn small" type="button" id="wk-prev" aria-label="이전 주">이전 주</button>
+          <select id="wk-sel" aria-label="주 선택">${weeks.map(([w, n]) => `<option value="${w}">${kd(w)} ~ ${kd(addDays(w, 6))}, 공지 ${n}건</option>`).join('')}</select>
+          <button class="btn small" type="button" id="wk-next" aria-label="다음 주">다음 주</button>
+        </div>
+        <div id="wk-body" aria-live="polite"></div>`;
+      const go = (w) => { location.hash = '#weekly/' + w; };
+      $('#wk-sel').addEventListener('change', (e) => go(e.target.value));
+      $('#wk-prev').addEventListener('click', () => { const i = weeks.findIndex(([w]) => w === $('#wk-sel').value); if (i > 0) go(weeks[i - 1][0]); });
+      $('#wk-next').addEventListener('click', () => { const i = weeks.findIndex(([w]) => w === $('#wk-sel').value); if (i < weeks.length - 1) go(weeks[i + 1][0]); });
+    }
+    const w = weeks.some(([x]) => x === args[0]) ? args[0] : '2026-02-23';
+    $('#wk-sel').value = w;
+    const i = weeks.findIndex(([x]) => x === w);
+    $('#wk-prev').disabled = i <= 0; $('#wk-next').disabled = i >= weeks.length - 1;
+    renderWeek(weekData(w));
+  }
+  function lineText(l, ship) { return `${recLabel(l.r)} ${l.total == null ? '금액 없음' : money(l.r.currency, l.total)}${l.status === 'alternative' ? '(후보)' : ''}`; }
+  function renderWeek(D) {
+    // KCCI는 매주 월요일 발표. 그 주 발표가 없으면(연휴 등) 그 전 발표를 쓰고 날짜를 적는다.
+    const ks = S.wk.kcci.filter((x) => x.date <= D.we).sort((a, b) => a.date.localeCompare(b.date));
+    const k = ks.at(-1), kp = ks.at(-2);
+    const kc = (v, p) => (p ? `${fmt(v)} <span class="muted small">(직전 대비 ${v - p >= 0 ? '+' : '−'}${fmt(Math.abs(v - p))})</span>` : fmt(v));
+    const carriers = [...new Set(D.notices.map(([, n]) => n.carrier))];
+    const unverified = D.hits.some((r) => r.added.some((l) => !Calc.humanOk(l.r)));
+    let html = `<div class="cmp wk-stats">
+      <div><span>새 공지</span><b class="num">${D.notices.length}건</b><span>${esc(carriers.join(', ') || '없음')}</span></div>
+      <div><span>금액이 바뀌는 진행 중 부킹</span><b class="num">${D.hits.length}건</b><span>진행 중 ${D.live.length}건 중</span></div>
+      <div><span>해상 할증 변화(USD)</span><b class="num ${D.usd > 0 ? 'up' : D.usd < 0 ? 'down' : ''}">${D.usd ? signMoney('USD', D.usd) : '0'}</b><span>대안이 있으면 큰 값 기준</span></div>
+      <div><span>KCCI 종합(${k ? kd(k.date) : ''} 발표)</span><b class="num">${k ? kc(k.kcci, kp && kp.kcci) : '—'}</b><span>중동항로 ${k ? kc(k.kmei, kp && kp.kmei) : '—'}</span></div>
+    </div>`;
+    html += `<div class="panel"><div class="panel-h"><h2>금액이 바뀌는 부킹 ${D.hits.length}건</h2><span class="small muted">부킹 ${D.live.length}건 × 2회 계산 ${D.calcMs.toFixed(0)}ms</span></div>
+      <p>이 주 전날까지 게시된 공지로 계산한 합계와, 이 주 공지까지 넣은 합계를 비교했습니다. 해상 할증만 봅니다.${unverified ? ' 사람 확인 전 데이터가 섞인 줄에는 표시를 붙였습니다.' : ''}</p>
+      ${D.hits.length ? `<div class="tbl-wrap" style="margin-top:12px"><table class="lines wk"><thead><tr><th>부킹</th><th>화물</th><th class="r">변경 전 → 후</th><th class="r">차이</th><th>원인</th></tr></thead><tbody>${D.hits.map((r) => {
+        const b = r.b;
+        const cause = [...r.added.map((l) => `<li><span class="plus">+</span> <a href="${noticeHref(l.r.notice_id, recIdx(l.r))}">${esc(lineText(l, r.ship))}</a> <span class="muted">${kd(l.notice.published_date)} 게시</span>${Calc.humanOk(l.r) ? '' : ' ' + recChip(l.r)}</li>`),
+          ...r.gone.map((l) => `<li><span class="minus">−</span> ${esc(lineText(l, r.ship))} <span class="muted">새 공지로 대체</span></li>`)].join('');
+        return `<tr><td><b>${esc(b.id)}</b><span class="nm">${esc(b.carrier)}</span></td>
+          <td>${esc(portKo(b.origin))} → ${esc(portKo(b.destination))}<span class="nm">${esc(SIZE[b.size])} ${b.qty}개, 부킹 ${kd(b.booking)}, 출항 ${kd(b.etd)}</span></td>
+          <td class="r num">${esc(curList(r.ta))} → ${esc(curList(r.tc))}</td>
+          <td class="r num">${Object.keys(r.delta).length ? Object.entries(r.delta).map(([cur, n]) => `<b class="${n > 0 ? 'up' : 'down'}">${esc(signMoney(cur, n))}</b>`).join('<br>') : '<span class="muted">금액 없음</span>'}</td>
+          <td><ul class="cause">${cause}</ul></td></tr>`;
+      }).join('')}</tbody></table></div>` : '<div class="empty">이 주 공지로 금액이 바뀌는 진행 중 부킹이 없습니다. 수집한 공지와 가상 부킹 범위 안에서의 결과입니다.</div>'}</div>`;
+    html += `<div class="panel"><div class="panel-h"><h2>이 주에 게시된 공지 ${D.notices.length}건</h2></div>
+      ${D.notices.length ? `<div class="tbl-wrap" style="margin-top:10px"><table class="stack"><thead><tr><th>게시</th><th>선사</th><th>공지</th><th>할증·요금</th><th>데이터</th></tr></thead><tbody>${D.notices.map(([nid, n]) => {
+        const recs = S.db.records.filter((r) => r.notice_id === nid);
+        const codes = [...new Set(recs.map(recLabel))];
+        const st = n.human ? chip('ok', '사람 확인') : n.labeled ? chip('warn', 'Claude 정답, 확인 전') : chip('warn', 'AI, 확인 전');
+        return `<tr><td class="num">${kd(n.published_date)}</td><td style="white-space:nowrap">${esc(n.carrier)}</td><td class="full"><a href="${noticeHref(nid)}">${esc(n.title || nid)}</a></td>
+          <td>${recs.length ? `${esc(codes.slice(0, 4).join(', '))}${codes.length > 4 ? ` 외 ${codes.length - 4}` : ''}<span class="nm">${recs.length}개</span>` : '<span class="muted">할증 없음</span>'}</td><td>${st}</td></tr>`;
+      }).join('')}</tbody></table></div>` : ''}</div>`;
+    const quiet = D.rows.filter((r) => !r.hit);
+    html += `<details class="sub panel" style="padding:14px 20px"><summary>변화 없는 진행 중 부킹 ${quiet.length}건 보기</summary>
+      <div class="tbl-wrap" style="margin-top:10px"><table class="stack"><thead><tr><th>부킹</th><th>선사</th><th>화물</th><th class="r">해상 할증 합계</th></tr></thead><tbody>${quiet.map((r) => `<tr><td>${esc(r.b.id)}</td><td>${esc(r.b.carrier)}</td>
+        <td>${esc(portKo(r.b.destination))}, ${esc(SIZE[r.b.size])} ${r.b.qty}개, 출항 ${kd(r.b.etd)}</td><td class="r num">${esc(curList(r.tc))}</td></tr>`).join('')}</tbody></table></div>
+      <p class="small muted" style="margin-top:8px">${esc(S.wk.note)} 할증 합계가 0인 부킹은 수집한 공지에 그 선사·구간의 할증이 없다는 뜻이지, 실제로 할증이 없다는 뜻은 아닙니다.</p></details>`;
+    $('#wk-body').innerHTML = html;
+  }
 
   // ---------- 공지함 ----------
   function noticeStats(nid) {
@@ -653,8 +761,8 @@
 
   // ---------- 시작 ----------
   route();
-  Promise.all(['db.json', 'scenario.json', 'report.json'].map((f) => fetch('data/' + f).then((r) => { if (!r.ok) throw new Error(f + ' ' + r.status); return r.json(); })))
-    .then(([db, sc, rep]) => { S.db = db; S.sc = sc; S.rep = rep; route(); })
+  Promise.all(['db.json', 'scenario.json', 'report.json', 'weekly.json'].map((f) => fetch('data/' + f).then((r) => { if (!r.ok) throw new Error(f + ' ' + r.status); return r.json(); })))
+    .then(([db, sc, rep, wk]) => { S.db = db; S.sc = sc; S.rep = rep; S.wk = wk; route(); })
     .catch((err) => {
       $$('.view').forEach((v) => { if (v.dataset.view !== 'overview') v.innerHTML = `<div class="empty">데이터를 불러오지 못했습니다(${esc(err.message)}). 새로고침해 보세요.</div>`; });
     });
